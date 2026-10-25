@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkyWay - 스마트 길찾기 & VWorld 지도 서비스</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter & Noto Sans KR -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- OpenLayers Library (VWorld 타일 맵 호환용) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/openlayers/openlayers.github.io@master/en/v6.15.1/css/ol.css" type="text/css">
+    <script src="https://cdn.jsdelivr.net/gh/openlayers/openlayers.github.io@master/en/v6.15.1/build/ol.js"></script>
+
+    <!-- VWorld Map API 2.0 -->
+    <script type="text/javascript" src="https://map.vworld.kr/js/vworldMapInit.js.do?version=2.0&apiKey=B6D2774E-1928-4481-9531-84799A30A35B"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        skybrand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Noto Sans KR', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        #vmap {
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+        /* Custom Scrollbar for side panel */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #bae6fd;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #38bdf8;
+        }
+        .ol-popup {
+            position: absolute;
+            background-color: white;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            padding: 10px 14px;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            bottom: 15px;
+            left: -50px;
+            min-width: 150px;
+            pointer-events: none;
+        }
+        .ol-popup:after, .ol-popup:before {
+            top: 100%;
+            border: solid transparent;
+            content: " ";
+            height: 0;
+            width: 0;
+            position: absolute;
+            pointer-events: none;
+        }
+        .ol-popup:after {
+            border-top-color: white;
+            border-width: 8px;
+            left: 50px;
+            margin-left: -8px;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-800 antialiased overflow-hidden h-screen w-screen flex flex-col md:flex-row">
+
+    <!-- 사이드바 / 검색 & 경로 패널 -->
+    <aside class="w-full md:w-[400px] lg:w-[440px] h-[55vh] md:h-full bg-white z-20 flex flex-col shadow-2xl relative border-r border-sky-100">
+        
+        <!-- 로고 및 서비스 헤더 -->
+        <header class="bg-gradient-to-r from-sky-400 to-sky-500 text-white p-4 shadow-md flex items-center justify-between">
+            <div class="flex items-center space-x-2">
+                <i class="fa-solid fa-compass text-2xl animate-pulse"></i>
+                <h1 class="font-bold text-xl tracking-tight">SkyWay <span class="text-xs bg-white text-sky-600 px-2 py-0.5 rounded-full font-semibold">VWorld 지도</span></h1>
+            </div>
+            <button id="reset-btn" class="text-xs bg-sky-600/50 hover:bg-sky-600 text-white px-2.5 py-1 rounded-md transition-all flex items-center gap-1">
+                <i class="fa-solid fa-rotate-right"></i> 초기화
+            </button>
+        </header>
+
+        <!-- 탭 메뉴 (장소 검색 vs 길찾기) -->
+        <div class="flex bg-sky-50 border-b border-sky-100">
+            <button id="tab-search" class="flex-1 py-3 text-center font-semibold text-sky-600 border-b-2 border-sky-500 transition-all flex items-center justify-center gap-2">
+                <i class="fa-solid fa-magnifying-glass"></i> 장소 검색
+            </button>
+            <button id="tab-route" class="flex-1 py-3 text-center font-semibold text-slate-400 border-b-2 border-transparent hover:text-sky-500 transition-all flex items-center justify-center gap-2">
+                <i class="fa-solid fa-route"></i> 길찾기
+            </button>
+        </div>
+
+        <!-- 1. 장소 검색 뷰 -->
+        <div id="view-search" class="p-4 flex-col gap-3">
+            <div class="relative">
+                <input type="text" id="single-search-input" placeholder="장소, 지하철역, 주소 검색 (예: 서울역)" 
+                    class="w-full pl-10 pr-10 py-3 bg-slate-50 border border-sky-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-400 focus:bg-white transition-all text-sm shadow-inner">
+                <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3.5 text-sky-400"></i>
+                <button id="clear-search" class="hidden absolute right-3 top-3 text-slate-400 hover:text-slate-600">
+                    <i class="fa-solid fa-circle-xmark"></i>
+                </button>
+            </div>
+
+            <!-- 편의 카테고리 버튼 -->
+            <div class="flex gap-2 pt-1 overflow-x-auto pb-1 text-xs no-scrollbar">
+                <button class="category-btn whitespace-nowrap bg-sky-50 hover:bg-sky-100 text-sky-700 px-3 py-1.5 rounded-lg border border-sky-200 transition-all flex items-center gap-1" data-query="카페">
+                    <i class="fa-solid fa-mug-hot text-sky-500"></i> 카페
+                </button>
+                <button class="category-btn whitespace-nowrap bg-sky-50 hover:bg-sky-100 text-sky-700 px-3 py-1.5 rounded-lg border border-sky-200 transition-all flex items-center gap-1" data-query="맛집">
+                    <i class="fa-solid fa-utensils text-sky-500"></i> 음식점
+                </button>
+                <button class="category-btn whitespace-nowrap bg-sky-50 hover:bg-sky-100 text-sky-700 px-3 py-1.5 rounded-lg border border-sky-200 transition-all flex items-center gap-1" data-query="관광지">
+                    <i class="fa-solid fa-camera text-sky-500"></i> 관광명소
+                </button>
+                <button class="category-btn whitespace-nowrap bg-sky-50 hover:bg-sky-100 text-sky-700 px-3 py-1.5 rounded-lg border border-sky-200 transition-all flex items-center gap-1" data-query="지하철역">
+                    <i class="fa-solid fa-train-subway text-sky-500"></i> 지하철
+                </button>
+            </div>
+        </div>
+
+        <!-- 2. 길찾기 뷰 (기본 숨김) -->
+        <div id="view-route" class="p-4 flex-col gap-3 hidden bg-sky-50/50 border-b border-sky-100">
+            <!-- 이동 수단 선택 -->
+            <div class="flex justify-around bg-white p-1 rounded-xl shadow-sm border border-sky-100 mb-1">
+                <button class="transport-btn active flex-1 py-1.5 text-xs font-medium rounded-lg text-white bg-sky-500 transition-all" data-mode="transit">
+                    <i class="fa-solid fa-bus mr-1"></i> 대중교통
+                </button>
+                <button class="transport-btn flex-1 py-1.5 text-xs font-medium rounded-lg text-slate-500 hover:text-sky-600 transition-all" data-mode="car">
+                    <i class="fa-solid fa-car mr-1"></i> 자동차
+                </button>
+                <button class="transport-btn flex-1 py-1.5 text-xs font-medium rounded-lg text-slate-500 hover:text-sky-600 transition-all" data-mode="walk">
+                    <i class="fa-solid fa-person-walking mr-1"></i> 도보
+                </button>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <div class="flex flex-col gap-2 flex-1">
+                    <div class="relative">
+                        <span class="absolute left-3 top-2.5 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-emerald-100"></span>
+                        <input type="text" id="start-input" placeholder="출발지를 입력하세요" 
+                            class="w-full pl-8 pr-3 py-2 bg-white border border-sky-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-sky-400">
+                    </div>
+                    <div class="relative">
+                        <span class="absolute left-3 top-2.5 w-2.5 h-2.5 rounded-full bg-rose-500 ring-2 ring-rose-100"></span>
+                        <input type="text" id="end-input" placeholder="도착지를 입력하세요" 
+                            class="w-full pl-8 pr-3 py-2 bg-white border border-sky-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-sky-400">
+                    </div>
+                </div>
+
+                <!-- 출발지/도착지 반전 버튼 -->
+                <button id="swap-route-btn" class="w-8 h-16 bg-white border border-sky-200 rounded-lg text-sky-500 hover:bg-sky-50 flex items-center justify-center transition-all shadow-sm">
+                    <i class="fa-solid fa-arrow-down-up-lock text-sm"></i>
+                </button>
+            </div>
+
+            <button id="find-route-btn" class="w-full py-2.5 bg-sky-500 hover:bg-sky-600 text-white font-semibold rounded-lg text-sm shadow-md transition-all flex items-center justify-center gap-2">
+                <i class="fa-solid fa-location-arrow"></i> 경로 찾기
+            </button>
+        </div>
+
+        <!-- 검색 결과 / 정보 출력 영역 -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-3" id="results-list">
+            <div id="empty-state" class="text-center py-12 text-slate-400">
+                <div class="w-16 h-16 mx-auto mb-3 bg-sky-50 rounded-full flex items-center justify-center text-sky-400 text-2xl">
+                    <i class="fa-solid fa-map-location-dot"></i>
+                </div>
+                <p class="font-medium text-slate-600">어디로 이동할까요?</p>
+                <p class="text-xs text-slate-400 mt-1">위 검색창에 장소를 입력하거나<br>지도에서 원하는 위치를 찾아보세요.</p>
+            </div>
+        </div>
+
+        <!-- 하단 추천 / 상태 바 -->
+        <footer class="p-3 bg-slate-50 border-t border-sky-100 text-xs text-slate-500 flex justify-between items-center">
+            <span class="flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span> VWorld Map 2.0 연동됨
+            </span>
+            <span class="text-sky-600 font-medium">SkyWay Maps v2.0</span>
+        </footer>
+    </aside>
+
+    <!-- 지도 영역 -->
+    <main class="flex-1 h-[45vh] md:h-full relative bg-sky-50">
+        <!-- VWorld / OpenLayers Map Container -->
+        <div id="vmap"></div>
+
+        <!-- 지도 위 부용버튼 (현재위치) -->
+        <button id="my-location-btn" class="absolute bottom-6 right-6 z-[1000] bg-white text-sky-600 p-3.5 rounded-full shadow-lg border border-sky-100 hover:bg-sky-50 transition-all flex items-center justify-center group" title="내 위치로">
+            <i class="fa-solid fa-crosshairs text-lg group-hover:rotate-45 transition-transform"></i>
+        </button>
+    </main>
+
+    <script>
+        // API KEY & VWorld Layer URL 설정
+        const VWORLD_API_KEY = "B6D2774E-1928-4481-9531-84799A30A35B";
+        
+        // 데이터 및 상태 변수
+        const samplePlaces = [
+            { id: 1, name: "서울역", category: "교통", address: "서울 용산구 한강대로 405", lat: 37.5559, lng: 126.9723, desc: "KTX 및 지하철 환승 중심지" },
+            { id: 2, name: "남산서울타워", category: "관광지", address: "서울 용산구 남산공원길 105", lat: 37.5512, lng: 126.9882, desc: "서울의 탁 트인 전경을 볼 수 있는 명소" },
+            { id: 3, name: "명동 롯데백화점", category: "맛집", address: "서울 중구 남대문로 81", lat: 37.5647, lng: 126.9817, desc: "다양한 브랜드와 먹거리가 있는 쇼핑몰" },
+            { id: 4, name: "경복궁", category: "관광지", address: "서울 종로구 사직로 161", lat: 37.5796, lng: 126.9770, desc: "조선 시대의 대표적인 궁궐" },
+            { id: 5, name: "스타벅스 광화문점", category: "카페", address: "서울 종로구 세종대로 167", lat: 37.5708, lng: 126.9768, desc: "분위기 좋은 카페" },
+            { id: 6, name: "블루보틀 삼청 카페", category: "카페", address: "서울 종로구 북촌로5길 76", lat: 37.5822, lng: 126.9818, desc: "핸드드립 전문 스페셜티 커피" },
+            { id: 7, name: "을지로3가역", category: "지하철역", address: "서울 중구 을지로 106", lat: 37.5663, lng: 126.9912, desc: "지하철 2호선, 3호선 환승역" }
+        ];
+
+        let map = null;
+        let vectorSource = null;
+        let vectorLayer = null;
+        let routeSource = null;
+        let routeLayer = null;
+        let currentStart = null;
+        let currentEnd = null;
+
+        // 웹 로드 완료 시 안전하게 지도 초기화
+        window.addEventListener('load', function() {
+            initMap();
+            setupEventListeners();
+        });
+
+        function initMap() {
+            // VWorld 지도 API v2.0 객체 호환성 검사 및 안전한 OpenLayers 맵 초기화
+            try {
+                if (window.vw && window.vw.ol3 && window.vw.ol3.Map) {
+                    vw.ol3.MapOptions = {
+                        basemapType: vw.ol3.BasemapType.GRAPHIC,
+                        controlDensity: vw.ol3.DensityType.BASIC,
+                        interactionDensity: vw.ol3.DensityType.BASIC,
+                        controls: [new vw.ol3.control.Zoom()],
+                        homePosition: vw.ol3.CameraPosition,
+                        initPosition: vw.ol3.CameraPosition
+                    };
+                    map = new vw.ol3.Map("vmap", vw.ol3.MapOptions);
+                } else {
+                    // Fallback: OpenLayers 기반 direct VWorld Tile Layer 연동 (오류 방지 및 호환 보장)
+                    const vworldBaseLayer = new ol.layer.Tile({
+                        title: 'VWorld Base Map',
+                        source: new ol.source.XYZ({
+                            url: `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_API_KEY}/Base/{z}/{y}/{x}.png`
+                        })
+                    });
+
+                    map = new ol.Map({
+                        target: 'vmap',
+                        layers: [vworldBaseLayer],
+                        view: new ol.View({
+                            center: ol.proj.fromLonLat([126.9780, 37.5665]),
+                            zoom: 14
+                        })
+                    });
+                }
+            } catch (err) {
+                console.warn("VWorld API SDK 파싱 오류. 타일 폴백 지도로 전환합니다.", err);
+                const fallbackLayer = new ol.layer.Tile({
+                    source: new ol.source.OSM()
+                });
+                map = new ol.Map({
+                    target: 'vmap',
+                    layers: [fallbackLayer],
+                    view: new ol.View({
+                        center: ol.proj.fromLonLat([126.9780, 37.5665]),
+                        zoom: 14
+                    })
+                });
+            }
+
+            // 마커 및 경로용 벡터 레이어 설정
+            vectorSource = new ol.source.Vector();
+            vectorLayer = new ol.layer.Vector({ source: vectorSource });
+
+            routeSource = new ol.source.Vector();
+            routeLayer = new ol.layer.Vector({
+                source: routeSource,
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: '#0284c7',
+                        width: 5,
+                        lineDash: [8, 8]
+                    })
+                })
+            });
+
+            map.addLayer(routeLayer);
+            map.addLayer(vectorLayer);
+
+            // 초기 샘플 장소 표시
+            displayPlaces(samplePlaces);
+        }
+
+        // 마커 생성 및 표시 함수
+        function displayPlaces(places) {
+            if (!vectorSource) return;
+            vectorSource.clear();
+
+            const resultsList = document.getElementById('results-list');
+            resultsList.innerHTML = '';
+
+            if (places.length === 0) {
+                resultsList.innerHTML = `
+                    <div class="text-center py-8 text-slate-400">
+                        <i class="fa-solid fa-circle-exclamation text-2xl mb-2 text-sky-300"></i>
+                        <p class="text-sm font-medium">검색 결과가 없습니다.</p>
+                        <p class="text-xs text-slate-400 mt-1">다른 키워드로 검색해 보세요.</p>
+                    </div>`;
+                return;
+            }
+
+            places.forEach((place) => {
+                // OpenLayers Feature 생성
+                const coord = ol.proj.fromLonLat([place.lng, place.lat]);
+                const feature = new ol.Feature({
+                    geometry: new ol.geom.Point(coord),
+                    name: place.name
+                });
+
+                // SVG 마커 스타일
+                const markerStyle = new ol.style.Style({
+                    image: new ol.style.Circle({
+                        radius: 8,
+                        fill: new ol.style.Fill({ color: '#0ea5e9' }),
+                        stroke: new ol.style.Stroke({ color: '#ffffff', width: 2 })
+                    }),
+                    text: new ol.style.Text({
+                        text: place.name,
+                        font: 'bold 12px Noto Sans KR, sans-serif',
+                        offsetY: -16,
+                        fill: new ol.style.Fill({ color: '#0369a1' }),
+                        stroke: new ol.style.Stroke({ color: '#ffffff', width: 3 })
+                    })
+                });
+
+                feature.setStyle(markerStyle);
+                vectorSource.addFeature(feature);
+
+                // 카드 UI 생성
+                const card = document.createElement('div');
+                card.className = "p-3.5 bg-white border border-sky-100 rounded-xl hover:border-sky-300 hover:shadow-md transition-all cursor-pointer group";
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-1">
+                        <h4 class="font-semibold text-slate-800 text-sm group-hover:text-sky-600 transition-colors">${place.name}</h4>
+                        <span class="text-[10px] bg-sky-50 text-sky-600 px-2 py-0.5 rounded-full border border-sky-100 font-medium">${place.category}</span>
+                    </div>
+                    <p class="text-xs text-slate-500 mb-2 flex items-center gap-1">
+                        <i class="fa-solid fa-location-dot text-sky-400 text-[10px]"></i> ${place.address}
+                    </p>
+                    <p class="text-xs text-slate-400 mb-3 line-clamp-1">${place.desc}</p>
+                    <div class="flex gap-2 border-t border-slate-50 pt-2">
+                        <button class="set-start-btn flex-1 py-1.5 bg-slate-50 hover:bg-sky-50 text-slate-600 hover:text-sky-600 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1">
+                            <i class="fa-solid fa-play text-[10px] text-emerald-500"></i> 출발
+                        </button>
+                        <button class="set-end-btn flex-1 py-1.5 bg-sky-500 hover:bg-sky-600 text-white rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1">
+                            <i class="fa-solid fa-flag-checkered text-[10px]"></i> 도착
+                        </button>
+                    </div>
+                `;
+
+                // 카드 클릭 이벤트
+                card.addEventListener('click', (e) => {
+                    if (!e.target.closest('button')) {
+                        map.getView().animate({ center: coord, zoom: 16, duration: 600 });
+                    }
+                });
+
+                card.querySelector('.set-start-btn').addEventListener('click', () => {
+                    setRouteEndpoint(place, 'start');
+                    switchTab('route');
+                });
+
+                card.querySelector('.set-end-btn').addEventListener('click', () => {
+                    setRouteEndpoint(place, 'end');
+                    switchTab('route');
+                });
+
+                resultsList.appendChild(card);
+            });
+        }
+
+        function setupEventListeners() {
+            document.getElementById('tab-search').addEventListener('click', () => switchTab('search'));
+            document.getElementById('tab-route').addEventListener('click', () => switchTab('route'));
+
+            const singleSearchInput = document.getElementById('single-search-input');
+            const clearSearchBtn = document.getElementById('clear-search');
+
+            singleSearchInput.addEventListener('input', (e) => {
+                const query = e.target.value.trim();
+                if (query.length > 0) {
+                    clearSearchBtn.classList.remove('hidden');
+                    filterPlaces(query);
+                } else {
+                    clearSearchBtn.classList.add('hidden');
+                    displayPlaces(samplePlaces);
+                }
+            });
+
+            clearSearchBtn.addEventListener('click', () => {
+                singleSearchInput.value = '';
+                clearSearchBtn.classList.add('hidden');
+                displayPlaces(samplePlaces);
+            });
+
+            document.querySelectorAll('.category-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const query = btn.getAttribute('data-query');
+                    singleSearchInput.value = query;
+                    clearSearchBtn.classList.remove('hidden');
+                    filterPlaces(query);
+                });
+            });
+
+            document.querySelectorAll('.transport-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    document.querySelectorAll('.transport-btn').forEach(b => {
+                        b.classList.remove('active', 'bg-sky-500', 'text-white');
+                        b.classList.add('text-slate-500');
+                    });
+                    const target = e.currentTarget;
+                    target.classList.add('active', 'bg-sky-500', 'text-white');
+                    target.classList.remove('text-slate-500');
+
+                    if (currentStart && currentEnd) {
+                        calculateAndDrawRoute();
+                    }
+                });
+            });
+
+            document.getElementById('find-route-btn').addEventListener('click', calculateAndDrawRoute);
+
+            document.getElementById('swap-route-btn').addEventListener('click', () => {
+                const startInput = document.getElementById('start-input');
+                const endInput = document.getElementById('end-input');
+
+                const tempVal = startInput.value;
+                startInput.value = endInput.value;
+                endInput.value = tempVal;
+
+                const tempPoint = currentStart;
+                currentStart = currentEnd;
+                currentEnd = tempPoint;
+
+                if (currentStart && currentEnd) {
+                    calculateAndDrawRoute();
+                }
+            });
+
+            document.getElementById('reset-btn').addEventListener('click', resetAll);
+            document.getElementById('my-location-btn').addEventListener('click', handleMyLocation);
+        }
+
+        function switchTab(tab) {
+            const searchTab = document.getElementById('tab-search');
+            const routeTab = document.getElementById('tab-route');
+            const searchView = document.getElementById('view-search');
+            const routeView = document.getElementById('view-route');
+
+            if (tab === 'search') {
+                searchTab.className = "flex-1 py-3 text-center font-semibold text-sky-600 border-b-2 border-sky-500 transition-all flex items-center justify-center gap-2";
+                routeTab.className = "flex-1 py-3 text-center font-semibold text-slate-400 border-b-2 border-transparent hover:text-sky-500 transition-all flex items-center justify-center gap-2";
+                searchView.classList.remove('hidden');
+                routeView.classList.add('hidden');
+            } else {
+                routeTab.className = "flex-1 py-3 text-center font-semibold text-sky-600 border-b-2 border-sky-500 transition-all flex items-center justify-center gap-2";
+                searchTab.className = "flex-1 py-3 text-center font-semibold text-slate-400 border-b-2 border-transparent hover:text-sky-500 transition-all flex items-center justify-center gap-2";
+                routeView.classList.remove('hidden');
+                searchView.classList.add('hidden');
+            }
+        }
+
+        function filterPlaces(query) {
+            const filtered = samplePlaces.filter(p => 
+                p.name.includes(query) || p.category.includes(query) || p.address.includes(query)
+            );
+            displayPlaces(filtered);
+        }
+
+        function setRouteEndpoint(place, type) {
+            if (type === 'start') {
+                currentStart = place;
+                document.getElementById('start-input').value = place.name;
+            } else {
+                currentEnd = place;
+                document.getElementById('end-input').value = place.name;
+            }
+
+            if (currentStart && currentEnd) {
+                calculateAndDrawRoute();
+            }
+        }
+
+        function calculateAndDrawRoute() {
+            if (!currentStart || !currentEnd) {
+                const resultsList = document.getElementById('results-list');
+                resultsList.innerHTML = `
+                    <div class="p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-700 text-xs flex items-center gap-2">
+                        <i class="fa-solid fa-triangle-exclamation text-base"></i>
+                        <span>출발지와 도착지를 모두 설정해 주세요.</span>
+                    </div>
+                `;
+                return;
+            }
+
+            routeSource.clear();
+
+            const p1 = ol.proj.fromLonLat([currentStart.lng, currentStart.lat]);
+            const p2 = ol.proj.fromLonLat([currentEnd.lng, currentEnd.lat]);
+            const mid = [(p1[0] + p2[0]) / 2 + 300, (p1[1] + p2[1]) / 2 - 300];
+
+            const routeLine = new ol.geom.LineString([p1, mid, p2]);
+            const routeFeature = new ol.Feature({ geometry: routeLine });
+
+            routeSource.addFeature(routeFeature);
+
+            // 지도 시점 맞추기
+            const extent = routeSource.getExtent();
+            map.getView().fit(extent, { padding: [80, 80, 80, 80], duration: 800 });
+
+            showRouteResultSummary();
+        }
+
+        function showRouteResultSummary() {
+            const resultsList = document.getElementById('results-list');
+            
+            const distanceKm = (Math.sqrt(
+                Math.pow(currentStart.lat - currentEnd.lat, 2) + 
+                Math.pow(currentStart.lng - currentEnd.lng, 2)
+            ) * 111).toFixed(1);
+
+            const activeMode = document.querySelector('.transport-btn.active').dataset.mode;
+            let timeMin = 0;
+            let modeText = "대중교통";
+
+            if (activeMode === 'walk') {
+                timeMin = Math.round(distanceKm * 15);
+                modeText = "도보";
+            } else if (activeMode === 'car') {
+                timeMin = Math.round(distanceKm * 3) + 2;
+                modeText = "자동차";
+            } else {
+                timeMin = Math.round(distanceKm * 5) + 4;
+                modeText = "대중교통";
+            }
+
+            resultsList.innerHTML = `
+                <div class="bg-gradient-to-br from-sky-500 to-sky-600 text-white p-4 rounded-xl shadow-md">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-xs bg-white/20 px-2 py-0.5 rounded text-white font-medium">${modeText} 추천 경로</span>
+                        <span class="text-xs opacity-90"><i class="fa-solid fa-location-arrow"></i> 약 ${distanceKm} km</span>
+                    </div>
+                    <div class="flex items-baseline gap-1 mb-3">
+                        <span class="text-3xl font-extrabold">${timeMin}</span>
+                        <span class="text-sm font-medium">분 소요</span>
+                    </div>
+                    <div class="text-xs bg-white/10 p-2.5 rounded-lg space-y-1">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-emerald-300"></span>
+                            <span class="truncate">출발: ${currentStart.name}</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-rose-300"></span>
+                            <span class="truncate">도착: ${currentEnd.name}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="p-3 bg-white border border-sky-100 rounded-xl space-y-3">
+                    <h5 class="text-xs font-bold text-slate-700 flex items-center gap-1">
+                        <i class="fa-solid fa-list-check text-sky-500"></i> 상세 경로 안내
+                    </h5>
+                    <ul class="text-xs text-slate-600 space-y-2.5 pl-2 relative before:absolute before:left-3.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-sky-100">
+                        <li class="flex items-start gap-3 relative z-10">
+                            <span class="w-3 h-3 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[8px] mt-0.5">1</span>
+                            <div>
+                                <p class="font-medium text-slate-800">${currentStart.name} 출발</p>
+                                <p class="text-[11px] text-slate-400">지정된 위치에서 출발합니다.</p>
+                            </div>
+                        </li>
+                        <li class="flex items-start gap-3 relative z-10">
+                            <span class="w-3 h-3 rounded-full bg-sky-500 text-white flex items-center justify-center text-[8px] mt-0.5">2</span>
+                            <div>
+                                <p class="font-medium text-slate-800">${modeText} 이동 진행</p>
+                                <p class="text-[11px] text-slate-400">VWorld 타일 기반 동선 안내</p>
+                            </div>
+                        </li>
+                        <li class="flex items-start gap-3 relative z-10">
+                            <span class="w-3 h-3 rounded-full bg-rose-500 text-white flex items-center justify-center text-[8px] mt-0.5">3</span>
+                            <div>
+                                <p class="font-medium text-slate-800">${currentEnd.name} 도착</p>
+                                <p class="text-[11px] text-slate-400">목적지 도착 예정</p>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            `;
+        }
+
+        function handleMyLocation() {
+            if ("geolocation" in navigator) {
+                navigator.geolocation.getCurrentPosition(position => {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    
+                    const myPos = ol.proj.fromLonLat([lng, lat]);
+                    map.getView().animate({ center: myPos, zoom: 16, duration: 800 });
+
+                    const myPlace = { name: "현재 위치", lat, lng };
+                    setRouteEndpoint(myPlace, 'start');
+                }, () => {
+                    alert("위치 정보를 가져올 수 없습니다.");
+                });
+            } else {
+                alert("이 브라우저에서는 위치 서비스를 지원하지 않습니다.");
+            }
+        }
+
+        function resetAll() {
+            if (vectorSource) vectorSource.clear();
+            if (routeSource) routeSource.clear();
+
+            currentStart = null;
+            currentEnd = null;
+
+            document.getElementById('start-input').value = '';
+            document.getElementById('end-input').value = '';
+            document.getElementById('single-search-input').value = '';
+            document.getElementById('clear-search').classList.add('hidden');
+
+            displayPlaces(samplePlaces);
+            switchTab('search');
+            map.getView().animate({ center: ol.proj.fromLonLat([126.9780, 37.5665]), zoom: 14, duration: 500 });
+        }
+    </script>
+</body>
+</html>
